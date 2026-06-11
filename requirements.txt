@@ -1,0 +1,9 @@
+torch
+torchaudio
+tqdm
+pandas
+numpy
+pesq
+pystoi
+ptflops
+pysepm @ https://github.com/schmiph2/pysepm/archive/master.zip
