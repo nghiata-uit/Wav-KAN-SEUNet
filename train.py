@@ -32,13 +32,18 @@ def train_model():
     parser.add_argument('--epochs', type=int, default=10, help='Number of epochs')
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--log_file', type=str, default='training_log.csv', help='Path to save metrics log')
+    parser.add_argument('--log_file', type=str, default='training_log.csv', help='Name of the log file')
+    parser.add_argument('--checkpoint', type=str, default=None, help='Path to model checkpoint to resume training')
     args = parser.parse_args()
 
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     BATCH_SIZE = args.batch_size
     EPOCHS = args.epochs
     LR = args.lr
+
+    # Tạo thư mục checkpoints
+    os.makedirs('checkpoints', exist_ok=True)
+    log_file_path = os.path.join('checkpoints', args.log_file)
 
     print(f"Loading training dataset from {args.clean_dir} and {args.noisy_dir}...")
     dataset = VoiceBankDataset(args.clean_dir, args.noisy_dir)
@@ -53,6 +58,14 @@ def train_model():
         print("Warning: Validation directories not provided. Validation metrics will not be computed.")
 
     model = WavKAN_UNet(wavelet_type=args.wavelet_type).to(DEVICE)
+    
+    if args.checkpoint:
+        if os.path.exists(args.checkpoint):
+            print(f"Loading checkpoint from {args.checkpoint}...")
+            model.load_state_dict(torch.load(args.checkpoint, map_location=DEVICE))
+        else:
+            print(f"Warning: Checkpoint {args.checkpoint} not found. Starting from scratch.")
+            
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
     criterion = nn.L1Loss()  # L1 Loss thường tốt cho spectrogram
 
@@ -165,10 +178,11 @@ def train_model():
             if not np.isnan(val_pesq) and val_pesq > best_pesq:
                 print(f"PESQ improved from {best_pesq:.3f} to {val_pesq:.3f}. Saving best model...")
                 best_pesq = val_pesq
-                torch.save(model.state_dict(), 'best_model.pth')
+                torch.save(model.state_dict(), os.path.join('checkpoints', 'model_best.pth'))
+                torch.save(model.state_dict(), os.path.join('checkpoints', f'model_best_epoch_{epoch+1}.pth'))
         else:
             # If no validation set, just save the model at each epoch or keep the latest
-            torch.save(model.state_dict(), 'latest_model.pth')
+            torch.save(model.state_dict(), os.path.join('checkpoints', 'latest_model.pth'))
 
         # Ghi log metrics
         epoch_log = {
@@ -183,7 +197,7 @@ def train_model():
             'Params': params
         }
         log_data.append(epoch_log)
-        pd.DataFrame(log_data).to_csv(args.log_file, index=False)
+        pd.DataFrame(log_data).to_csv(log_file_path, index=False)
 
 if __name__ == "__main__":
     train_model()

@@ -65,6 +65,7 @@ def compute_metrics(clean_audio, enhanced_audio, fs=16000):
             metrics['CBAK'] = cbak
             metrics['COVL'] = covl
         except Exception as e:
+            print(f"pysepm error: {e}")
             metrics['CSIG'] = float('nan')
             metrics['CBAK'] = float('nan')
             metrics['COVL'] = float('nan')
@@ -101,6 +102,6 @@ def evaluate_batch(clean_batch, enhanced_batch, fs=16000):
         if len(v) > 0:
             avg_metrics[k] = np.mean(v)
         else:
-            avg_metrics[k] = 0.0
+            avg_metrics[k] = float('nan')
             
     return avg_metrics
