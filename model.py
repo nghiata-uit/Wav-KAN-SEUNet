@@ -72,7 +72,7 @@ class ConvBlock(nn.Module):
 # ==========================================
 
 class WavKAN_UNet(nn.Module):
-    def __init__(self):
+    def __init__(self, wavelet_type='mexican_hat'):
         super(WavKAN_UNet, self).__init__()
 
         # --- Encoder (Downsampling) ---
@@ -92,7 +92,7 @@ class WavKAN_UNet(nn.Module):
 
         # Wav-KAN Bridge: Xử lý thông tin channels
         # Thay vì chỉ dùng Dense Layer thường, ta dùng WavKANLayer
-        self.wav_kan = WavKANLayer(256, 256, wavelet_type='mexican_hat')
+        self.wav_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
 
         # --- Decoder (Upsampling) ---
         self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)

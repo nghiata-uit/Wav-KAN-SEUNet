@@ -49,4 +49,4 @@ class VoiceBankDataset(Dataset):
 
         # Thêm chiều channel (1, F, T) -> để vào Conv2d
         # STFT output là (Freq, Time), cần thêm dim 0
-        return noisy_mag.unsqueeze(0), clean_mag.unsqueeze(0)
+        return noisy_mag.unsqueeze(0), clean_mag.unsqueeze(0), noisy_audio, clean_audio
