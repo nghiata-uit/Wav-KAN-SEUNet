@@ -47,6 +47,5 @@ class VoiceBankDataset(Dataset):
         clean_mag, _, _ = AudioUtils.audio_to_spec(clean_audio)
         noisy_mag, _, _ = AudioUtils.audio_to_spec(noisy_audio)
 
-        # Thêm chiều channel (1, F, T) -> để vào Conv2d
-        # STFT output là (Freq, Time), cần thêm dim 0
-        return noisy_mag.unsqueeze(0), clean_mag.unsqueeze(0), noisy_audio, clean_audio
+        # STFT output là (1, Freq, Time), đã có channel = 1
+        return noisy_mag, clean_mag, noisy_audio, clean_audio
