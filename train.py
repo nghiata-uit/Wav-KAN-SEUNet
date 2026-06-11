@@ -134,7 +134,7 @@ def train_model():
                     batch_pred_audio = []
                     for i in range(pred_spec.shape[0]):
                         # Reconstruct phase using the noisy audio phase
-                        mag, phase, _ = AudioUtils.audio_to_spec(noisy_audio[i].unsqueeze(0))
+                        mag, phase, _ = AudioUtils.audio_to_spec(noisy_audio[i])
                         # Use predicted magnitude, original phase
                         pred_mag_i = pred_spec[i, 0] # (F, T)
                         # Reconstruct
