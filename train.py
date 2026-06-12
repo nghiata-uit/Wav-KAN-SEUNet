@@ -34,6 +34,7 @@ def train_model():
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
     parser.add_argument('--log_file', type=str, default='training_log.csv', help='Name of the log file')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to model checkpoint to resume training')
+    parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping based on Val_PESQ')
     args = parser.parse_args()
 
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -86,6 +87,7 @@ def train_model():
         print("ptflops not installed. Skipping GFLOPs calculation.")
 
     best_pesq = -1.0
+    epochs_no_improve = 0
     log_data = []
 
     for epoch in range(EPOCHS):
@@ -178,8 +180,12 @@ def train_model():
             if not np.isnan(val_pesq) and val_pesq > best_pesq:
                 print(f"PESQ improved from {best_pesq:.3f} to {val_pesq:.3f}. Saving best model...")
                 best_pesq = val_pesq
+                epochs_no_improve = 0
                 torch.save(model.state_dict(), os.path.join('checkpoints', 'model_best.pth'))
                 torch.save(model.state_dict(), os.path.join('checkpoints', f'model_best_epoch_{epoch+1}.pth'))
+            else:
+                epochs_no_improve += 1
+                print(f"No improvement in PESQ for {epochs_no_improve} epochs.")
         else:
             # If no validation set, just save the model at each epoch or keep the latest
             torch.save(model.state_dict(), os.path.join('checkpoints', 'latest_model.pth'))
@@ -198,6 +204,11 @@ def train_model():
         }
         log_data.append(epoch_log)
         pd.DataFrame(log_data).to_csv(log_file_path, index=False)
+
+        # Early stopping check
+        if val_dataloader is not None and epochs_no_improve >= args.patience:
+            print(f"\nEarly stopping triggered! No improvement in Val_PESQ for {args.patience} consecutive epochs.")
+            break
 
 if __name__ == "__main__":
     train_model()
