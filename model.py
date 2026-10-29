@@ -2,6 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+try:
+    from kan import KAN
+except ImportError:
+    KAN = None
+
 
 # ==========================================
 # 1. Wav-KAN Layer (Lõi Wavelet)
@@ -43,7 +48,6 @@ class WavKANLayer(nn.Module):
             basis = -t * torch.exp(-t ** 2 / 2)
 
         # Tương tự phép nhân ma trận nhưng có basis function
-        # y = sum(w * basis)
         y = torch.sum(basis * self.weights.unsqueeze(0), dim=1)  # (B, Out)
 
         return y
@@ -72,8 +76,10 @@ class ConvBlock(nn.Module):
 # ==========================================
 
 class WavKAN_UNet(nn.Module):
-    def __init__(self, wavelet_type='mexican_hat'):
+    def __init__(self, kan_type='wavelet', wavelet_type='mexican_hat',
+                 grid_size=5, spline_order=3, **kwargs):
         super(WavKAN_UNet, self).__init__()
+        self.kan_type = kan_type
 
         # --- Encoder (Downsampling) ---
         self.enc1 = ConvBlock(1, 32)
@@ -85,14 +91,19 @@ class WavKAN_UNet(nn.Module):
         self.enc3 = ConvBlock(64, 128)
         self.pool3 = nn.MaxPool2d(2)
 
-        # --- Bottleneck với Wav-KAN ---
-        # Tại đây kích thước feature map đã nhỏ, ta dùng Wav-KAN để học global context
-        # Giả sử input ảnh Spectrogram chuẩn hóa về kích thước chia hết cho 8 (ví dụ 256x256 -> 32x32)
+        # --- Bottleneck ---
         self.bottleneck_conv = nn.Conv2d(128, 256, 3, padding=1)
 
-        # Wav-KAN Bridge: Xử lý thông tin channels
-        # Thay vì chỉ dùng Dense Layer thường, ta dùng WavKANLayer
-        self.wav_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
+        # Chọn bottleneck: Wavelet-KAN hoặc B-Spline KAN (sử dụng pykan chính thức)
+        if self.kan_type == 'wavelet':
+            self.bottleneck_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
+        elif self.kan_type == 'bspline':
+            if KAN is None:
+                raise ImportError("Thư viện 'pykan' không được tìm thấy. Vui lòng cài đặt pykan chính thức để sử dụng kan_type='bspline'.")
+            # Sử dụng KAN chính thức của pykan với các hàm spline B-spline
+            self.bottleneck_kan = KAN([256, 256], grid=grid_size, k=spline_order)
+        else:
+            raise ValueError("kan_type không hợp lệ. Chỉ hỗ trợ 'wavelet' hoặc 'bspline'.")
 
         # --- Decoder (Upsampling) ---
         self.up3 = nn.ConvTranspose2d(256, 128, kernel_size=2, stride=2)
@@ -124,20 +135,18 @@ class WavKAN_UNet(nn.Module):
         # Bottleneck
         b = self.bottleneck_conv(p3)  # (B, 256, F/8, T/8)
 
-        # Apply Wav-KAN trên chiều channel (như 1x1 Conv nhưng xịn hơn)
-        # Cần reshape: (B, C, H, W) -> (B * H * W, C)
+        # Áp dụng KAN tại bottleneck theo chiều channel: (B, C, H, W) -> (B * H * W, C)
         batch, c, h, w = b.shape
         b_flat = b.permute(0, 2, 3, 1).contiguous().view(-1, c)
 
-        # WavKAN Transform
-        b_processed = self.wav_kan(b_flat)
+        # Biến đổi bằng bottleneck_kan
+        b_processed = self.bottleneck_kan(b_flat)
 
-        # Reshape lại
+        # Reshape lại về dạng tensor 2D
         b_out = b_processed.view(batch, h, w, c).permute(0, 3, 1, 2)
 
         # Decoder
         u3 = self.up3(b_out)
-        # Crop hoặc Pad nếu kích thước không khớp do padding lẻ (đơn giản hóa ở đây giả sử khớp)
         if u3.shape != e3.shape:
             u3 = F.interpolate(u3, size=e3.shape[2:])
         d3 = self.dec3(torch.cat([u3, e3], dim=1))
