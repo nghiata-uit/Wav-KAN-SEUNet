@@ -6,26 +6,39 @@ import torch.nn.functional as F
 KAN = None
 _KAN_IMPORT_ERROR = None
 try:
-    # Cách import phổ biến của pykan
-    from kan import KAN as _KAN
-    KAN = _KAN
-except Exception as e1:
+    # Đảm bảo các dependency cần thiết có sẵn
     try:
-        import kan
-        # Một số phiên bản export khác tên class
-        if hasattr(kan, "KAN"):
-            KAN = kan.KAN
-        elif hasattr(kan, "MultKAN"):
-            KAN = kan.MultKAN
-        else:
-            try:
-                from kan.MultKAN import MultKAN as _MultKAN
-                KAN = _MultKAN
-            except Exception:
-                raise e1
-    except Exception as e2:
-        _KAN_IMPORT_ERROR = e2
-        KAN = None
+        import sklearn  # noqa: F401
+    except Exception:
+        pass
+    try:
+        import sympy  # noqa: F401
+    except Exception:
+        pass
+    # Cách import phổ biến của pykan
+    try:
+        from kan import KAN as _KAN
+        KAN = _KAN
+    except Exception as e1:
+        try:
+            import kan
+            # Một số phiên bản export khác tên class
+            if hasattr(kan, "KAN"):
+                KAN = kan.KAN
+            elif hasattr(kan, "MultKAN"):
+                KAN = kan.MultKAN
+            else:
+                try:
+                    from kan.MultKAN import MultKAN as _MultKAN
+                    KAN = _MultKAN
+                except Exception:
+                    raise e1
+        except Exception as e2:
+            _KAN_IMPORT_ERROR = e2
+            KAN = None
+except Exception as e3:
+    _KAN_IMPORT_ERROR = e3
+    KAN = None
 
 
 # ==========================================
