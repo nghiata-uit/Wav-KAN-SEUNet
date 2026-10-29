@@ -2,10 +2,30 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+# Thử import KAN từ pykan một cách linh hoạt
+KAN = None
+_KAN_IMPORT_ERROR = None
 try:
-    from kan import KAN
-except ImportError:
-    KAN = None
+    # Cách import phổ biến của pykan
+    from kan import KAN as _KAN
+    KAN = _KAN
+except Exception as e1:
+    try:
+        import kan
+        # Một số phiên bản export khác tên class
+        if hasattr(kan, "KAN"):
+            KAN = kan.KAN
+        elif hasattr(kan, "MultKAN"):
+            KAN = kan.MultKAN
+        else:
+            try:
+                from kan.MultKAN import MultKAN as _MultKAN
+                KAN = _MultKAN
+            except Exception:
+                raise e1
+    except Exception as e2:
+        _KAN_IMPORT_ERROR = e2
+        KAN = None
 
 
 # ==========================================
@@ -99,9 +119,13 @@ class WavKAN_UNet(nn.Module):
             self.bottleneck_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
         elif self.kan_type == 'bspline':
             if KAN is None:
-                raise ImportError("Thư viện 'pykan' không được tìm thấy. Vui lòng cài đặt pykan chính thức để sử dụng kan_type='bspline'.")
-            # Sử dụng KAN chính thức của pykan với các hàm spline B-spline
-            self.bottleneck_kan = KAN([256, 256], grid=grid_size, k=spline_order)
+                err_msg = "Thư viện 'pykan' không được tìm thấy hoặc không import được KAN/MultKAN."
+                if _KAN_IMPORT_ERROR is not None:
+                    err_msg += f" Chi tiết: {_KAN_IMPORT_ERROR}"
+                err_msg += " Hãy cài đặt bằng: pip install git+https://github.com/KindXiaoming/pykan.git"
+                raise ImportError(err_msg)
+            # Dùng API chính thức của pykan: width=[in_dim, out_dim]
+            self.bottleneck_kan = KAN(width=[256, 256], grid=grid_size, k=spline_order)
         else:
             raise ValueError("kan_type không hợp lệ. Chỉ hỗ trợ 'wavelet' hoặc 'bspline'.")
 
