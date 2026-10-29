@@ -2,43 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Thử import KAN từ pykan một cách linh hoạt
-KAN = None
-_KAN_IMPORT_ERROR = None
-try:
-    # Đảm bảo các dependency cần thiết có sẵn
-    try:
-        import sklearn  # noqa: F401
-    except Exception:
-        pass
-    try:
-        import sympy  # noqa: F401
-    except Exception:
-        pass
-    # Cách import phổ biến của pykan
-    try:
-        from kan import KAN as _KAN
-        KAN = _KAN
-    except Exception as e1:
-        try:
-            import kan
-            # Một số phiên bản export khác tên class
-            if hasattr(kan, "KAN"):
-                KAN = kan.KAN
-            elif hasattr(kan, "MultKAN"):
-                KAN = kan.MultKAN
-            else:
-                try:
-                    from kan.MultKAN import MultKAN as _MultKAN
-                    KAN = _MultKAN
-                except Exception:
-                    raise e1
-        except Exception as e2:
-            _KAN_IMPORT_ERROR = e2
-            KAN = None
-except Exception as e3:
-    _KAN_IMPORT_ERROR = e3
-    KAN = None
+from kan import KAN
 
 
 # ==========================================
@@ -131,13 +95,6 @@ class WavKAN_UNet(nn.Module):
         if self.kan_type == 'wavelet':
             self.bottleneck_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
         elif self.kan_type == 'bspline':
-            if KAN is None:
-                err_msg = "Thư viện 'pykan' không được tìm thấy hoặc không import được KAN/MultKAN."
-                if _KAN_IMPORT_ERROR is not None:
-                    err_msg += f" Chi tiết: {_KAN_IMPORT_ERROR}"
-                err_msg += " Hãy cài đặt bằng: pip install git+https://github.com/KindXiaoming/pykan.git"
-                raise ImportError(err_msg)
-            # Dùng API chính thức của pykan: width=[in_dim, out_dim]
             self.bottleneck_kan = KAN(width=[256, 256], grid=grid_size, k=spline_order)
         else:
             raise ValueError("kan_type không hợp lệ. Chỉ hỗ trợ 'wavelet' hoặc 'bspline'.")
