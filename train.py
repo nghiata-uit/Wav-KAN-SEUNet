@@ -40,6 +40,8 @@ def train_model():
     parser.add_argument('--log_file', type=str, default='training_log.csv', help='Name of the log file')
     parser.add_argument('--checkpoint', type=str, default=None, help='Path to model checkpoint to resume training')
     parser.add_argument('--patience', type=int, default=10, help='Patience for early stopping based on Val_PESQ')
+    parser.add_argument('--compile', action='store_true', help='Use torch.compile (PyTorch 2.x)')
+    parser.add_argument('--num_workers', type=int, default=None, help='Number of DataLoader workers')
     args = parser.parse_args()
 
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -47,20 +49,32 @@ def train_model():
     EPOCHS = args.epochs
     LR = args.lr
 
+    # Tăng tốc
+    try:
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = False
+    except Exception:
+        pass
+    try:
+        torch.set_float32_matmul_precision('high')
+    except Exception:
+        pass
+
     # Tạo thư mục checkpoints
     os.makedirs('checkpoints', exist_ok=True)
     log_file_path = os.path.join('checkpoints', args.log_file)
 
     print(f"Loading training dataset from {args.clean_dir} and {args.noisy_dir}...")
     dataset = VoiceBankDataset(args.clean_dir, args.noisy_dir)
-    num_workers = min(4, os.cpu_count() or 0)
+    num_workers = args.num_workers if args.num_workers is not None else min(4, os.cpu_count() or 0)
     dataloader = DataLoader(
         dataset,
         batch_size=BATCH_SIZE,
         shuffle=True,
         num_workers=num_workers,
         pin_memory=(DEVICE.type == 'cuda'),
-        persistent_workers=(num_workers > 0)
+        persistent_workers=(num_workers > 0),
+        drop_last=False,
     )
 
     val_dataloader = None
@@ -73,7 +87,7 @@ def train_model():
             shuffle=False,
             num_workers=num_workers,
             pin_memory=(DEVICE.type == 'cuda'),
-            persistent_workers=(num_workers > 0)
+            persistent_workers=(num_workers > 0),
         )
     else:
         print("Warning: Validation directories not provided. Validation metrics will not be computed.")
@@ -86,21 +100,18 @@ def train_model():
         spline_order=args.bspline_order
     ).to(DEVICE)
 
-    if args.kan_type == 'bspline':
-        # Tối ưu hóa tốc độ cho pykan
+    if args.compile and hasattr(torch, 'compile'):
         try:
-            torch.backends.cudnn.benchmark = True
-        except Exception:
-            pass
-        try:
-            torch.set_float32_matmul_precision('high')
-        except Exception:
-            pass
+            print("Compiling model with torch.compile...")
+            model = torch.compile(model)
+        except Exception as e:
+            print(f"torch.compile failed: {e}")
 
     if args.checkpoint:
         if os.path.exists(args.checkpoint):
             print(f"Loading checkpoint from {args.checkpoint}...")
-            model.load_state_dict(torch.load(args.checkpoint, map_location=DEVICE))
+            state_dict = torch.load(args.checkpoint, map_location=DEVICE)
+            model.load_state_dict(state_dict)
         else:
             print(f"Warning: Checkpoint {args.checkpoint} not found. Starting from scratch.")
 
@@ -110,7 +121,7 @@ def train_model():
     print(f"Bắt đầu train trên {DEVICE}...")
 
     # Tính toán GFLOPs
-    if get_model_complexity_info is not None:
+    if get_model_complexity_info is not None and args.kan_type != 'bspline':
         try:
             macs, params = get_model_complexity_info(model, (1, 257, 251), as_strings=True,
                                                      print_per_layer_stat=False, verbose=False)
@@ -120,11 +131,14 @@ def train_model():
             macs, params = "N/A", "N/A"
     else:
         macs, params = "N/A", "N/A"
-        print("ptflops not installed. Skipping GFLOPs calculation.")
+        if args.kan_type == 'bspline':
+            print("Skipping GFLOPs for bspline (pykan not supported by ptflops).")
 
     best_pesq = -1.0
     epochs_no_improve = 0
     log_data = []
+
+    scaler = torch.cuda.amp.GradScaler(enabled=(DEVICE.type == 'cuda'))
 
     for epoch in range(EPOCHS):
         model.train()
@@ -132,17 +146,18 @@ def train_model():
 
         for noisy_spec, clean_spec, noisy_audio, clean_audio in tqdm(dataloader,
                                                                      desc=f"Epoch {epoch + 1}/{EPOCHS} [Train]"):
-            noisy_spec = noisy_spec.to(DEVICE)
-            clean_spec = clean_spec.to(DEVICE)
+            noisy_spec = noisy_spec.to(DEVICE, non_blocking=True)
+            clean_spec = clean_spec.to(DEVICE, non_blocking=True)
 
-            mask = model(noisy_spec)
-            pred_spec = mask * noisy_spec
+            optimizer.zero_grad(set_to_none=True)
+            with torch.cuda.amp.autocast(enabled=(DEVICE.type == 'cuda')):
+                mask = model(noisy_spec)
+                pred_spec = mask * noisy_spec
+                loss = criterion(pred_spec, clean_spec)
 
-            loss = criterion(pred_spec, clean_spec)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
             total_loss += loss.item()
 
@@ -168,12 +183,12 @@ def train_model():
             with torch.no_grad():
                 for noisy_spec, clean_spec, noisy_audio, clean_audio in tqdm(val_dataloader,
                                                                              desc=f"Epoch {epoch + 1}/{EPOCHS} [Val]"):
-                    noisy_spec = noisy_spec.to(DEVICE)
+                    noisy_spec = noisy_spec.to(DEVICE, non_blocking=True)
+                    noisy_audio = noisy_audio.to(DEVICE, non_blocking=True)
 
-                    mask = model(noisy_spec)
-                    pred_spec = mask * noisy_spec
-
-                    noisy_audio = noisy_audio.to(DEVICE)
+                    with torch.cuda.amp.autocast(enabled=(DEVICE.type == 'cuda')):
+                        mask = model(noisy_spec)
+                        pred_spec = mask * noisy_spec
 
                     batch_pred_audio = []
                     for i in range(pred_spec.shape[0]):
