@@ -15,9 +15,16 @@ except ImportError:
     stoi = None
 
 try:
+    import numpy as _np
+    if not hasattr(_np, 'NaN'):
+        _np.NaN = _np.nan
+    if not hasattr(_np, 'Infty'):
+        _np.Infty = _np.inf
+    if not hasattr(_np, 'Infinity'):
+        _np.Infinity = _np.inf
     import pysepm
-except ImportError:
-    print("Warning: pysepm not installed. Run `pip install https://github.com/schmiph2/pysepm/archive/master.zip`")
+except Exception as e:
+    print(f"Warning: pysepm not installed or incompatible. {e}")
     pysepm = None
 
 def compute_metrics(clean_audio, enhanced_audio, fs=16000):
