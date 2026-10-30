@@ -53,13 +53,28 @@ def train_model():
 
     print(f"Loading training dataset from {args.clean_dir} and {args.noisy_dir}...")
     dataset = VoiceBankDataset(args.clean_dir, args.noisy_dir)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+    num_workers = min(4, os.cpu_count() or 0)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=BATCH_SIZE,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=(DEVICE.type == 'cuda'),
+        persistent_workers=(num_workers > 0)
+    )
 
     val_dataloader = None
     if args.val_clean_dir and args.val_noisy_dir:
         print(f"Loading validation dataset from {args.val_clean_dir} and {args.val_noisy_dir}...")
         val_dataset = VoiceBankDataset(args.val_clean_dir, args.val_noisy_dir)
-        val_dataloader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=(DEVICE.type == 'cuda'),
+            persistent_workers=(num_workers > 0)
+        )
     else:
         print("Warning: Validation directories not provided. Validation metrics will not be computed.")
 
@@ -70,6 +85,17 @@ def train_model():
         grid_size=args.bspline_grid,
         spline_order=args.bspline_order
     ).to(DEVICE)
+
+    if args.kan_type == 'bspline':
+        # Tối ưu hóa tốc độ cho pykan
+        try:
+            torch.backends.cudnn.benchmark = True
+        except Exception:
+            pass
+        try:
+            torch.set_float32_matmul_precision('high')
+        except Exception:
+            pass
 
     if args.checkpoint:
         if os.path.exists(args.checkpoint):

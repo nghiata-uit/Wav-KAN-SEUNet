@@ -95,7 +95,18 @@ class WavKAN_UNet(nn.Module):
         if self.kan_type == 'wavelet':
             self.bottleneck_kan = WavKANLayer(256, 256, wavelet_type=wavelet_type)
         elif self.kan_type == 'bspline':
-            self.bottleneck_kan = KAN(width=[256, 256], grid=grid_size, k=spline_order)
+            # Tối ưu hóa cho tốc độ với pykan chính thức
+            self.bottleneck_kan = KAN(
+                width=[256, 256],
+                grid=grid_size,
+                k=spline_order,
+                symbolic_enabled=False,
+                save_act=False,
+                auto_save=False,
+                first_init=False,
+                grid_eps=1.0,
+                sparse_init=False,
+            )
         else:
             raise ValueError("kan_type không hợp lệ. Chỉ hỗ trợ 'wavelet' hoặc 'bspline'.")
 
