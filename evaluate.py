@@ -17,6 +17,18 @@ except ImportError:
     get_model_complexity_info = None
 
 try:
+    from thop import profile, clever_format
+    THOP_AVAILABLE = True
+except Exception:
+    THOP_AVAILABLE = False
+
+try:
+    from fvcore.nn import FlopCountAnalysis
+    FVCORE_AVAILABLE = True
+except Exception:
+    FVCORE_AVAILABLE = False
+
+try:
     from pypapi import events, papi_high
     PAPI_AVAILABLE = True
 except Exception:
@@ -52,6 +64,31 @@ def measure_gflops_papi(model, input_shape=(1, 1, 257, 251), device='cuda'):
         raise RuntimeError("PAPI trả về giá trị âm. Thử chạy lại hoặc kiểm tra cấu hình PAPI.")
 
     gflops = flops / 1e9
+    return gflops
+
+
+def measure_gflops_thop(model, input_shape=(1, 1, 257, 251), device='cuda'):
+    if not THOP_AVAILABLE:
+        raise RuntimeError("thop chưa được cài đặt. Vui lòng cài đặt: pip install thop")
+
+    model.eval()
+    dummy_input = torch.randn(*input_shape).to(device)
+    with torch.no_grad():
+        macs, params = profile(model, inputs=(dummy_input,), verbose=False)
+    gflops = macs * 2 / 1e9  # MACs -> GFLOPs xấp xỉ
+    return gflops, params
+
+
+def measure_gflops_fvcore(model, input_shape=(1, 1, 257, 251), device='cuda'):
+    if not FVCORE_AVAILABLE:
+        raise RuntimeError("fvcore chưa được cài đặt. Vui lòng cài đặt: pip install fvcore")
+
+    model.eval()
+    dummy_input = torch.randn(*input_shape).to(device)
+    with torch.no_grad():
+        flops = FlopCountAnalysis(model, dummy_input)
+        total_flops = flops.total()
+    gflops = total_flops / 1e9
     return gflops
 
 
@@ -138,20 +175,36 @@ def evaluate_model():
         else:
             print("ptflops not installed. Skipping GFLOPs calculation.")
     elif kan_type == 'bspline':
-        if args.use_papi or PAPI_AVAILABLE:
-            if not PAPI_AVAILABLE:
-                print("pypapi không khả dụng. Cài đặt: pip install python-papi")
-            else:
+        measured = False
+        if THOP_AVAILABLE:
+            try:
+                print("Đo GFLOPs bằng thop...")
+                gflops, _ = measure_gflops_thop(model, input_shape=(1, 1, 257, 251), device=DEVICE.type)
+                macs_or_gflops = f"{gflops:.3f} GFLOPs (thop)"
+                measured = True
+            except Exception as e:
+                print(f"thop thất bại: {e}")
+        if not measured and FVCORE_AVAILABLE:
+            try:
+                print("Đo GFLOPs bằng fvcore...")
+                gflops = measure_gflops_fvcore(model, input_shape=(1, 1, 257, 251), device=DEVICE.type)
+                macs_or_gflops = f"{gflops:.3f} GFLOPs (fvcore)"
+                measured = True
+            except Exception as e:
+                print(f"fvcore thất bại: {e}")
+        if not measured and (args.use_papi or PAPI_AVAILABLE):
+            if PAPI_AVAILABLE:
                 try:
                     print("Đo GFLOPs bằng pypapi...")
                     gflops = measure_gflops_papi(model, input_shape=(1, 1, 257, 251), device=DEVICE.type)
                     macs_or_gflops = f"{gflops:.3f} GFLOPs (PAPI FP_OPS)"
-                    print(f"GFLOPs (pypapi): {macs_or_gflops}")
+                    measured = True
                 except Exception as e:
-                    print(f"Lỗi khi đo GFLOPs bằng pypapi: {e}")
-                    print("Gợi ý: thử chạy với quyền root/sudo hoặc môi trường có hỗ trợ PAPI.")
-        else:
-            print("Bỏ qua GFLOPs cho B-Spline KAN. Thêm --use_papi để đo bằng pypapi.")
+                    print(f"pypapi thất bại: {e}")
+            else:
+                print("pypapi không khả dụng.")
+        if not measured:
+            print("Không thể đo GFLOPs cho B-Spline KAN. Cài đặt: pip install thop fvcore")
 
     all_pesq, all_stoi, all_csig, all_cbak, all_covl = [], [], [], [], []
 
