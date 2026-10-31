@@ -33,12 +33,28 @@ def evaluate_model():
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
 
     print(f"Loading model from {args.model_path} with wavelet type: {args.wavelet_type}")
-    model = WavKAN_UNet(wavelet_type=args.wavelet_type).to(DEVICE)
+    # Mặc định sử dụng wavelet để tương thích với checkpoint cũ
+    model = WavKAN_UNet(kan_type='wavelet', wavelet_type=args.wavelet_type).to(DEVICE)
     
     # Load model weights
     if not os.path.exists(args.model_path):
         raise FileNotFoundError(f"Model file not found: {args.model_path}")
-    model.load_state_dict(torch.load(args.model_path, map_location=DEVICE))
+    checkpoint = torch.load(args.model_path, map_location=DEVICE)
+    if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
+        checkpoint = checkpoint['state_dict']
+    # Tương thích ngược với checkpoint cũ (wav_kan -> bottleneck_kan)
+    new_state_dict = {}
+    for k, v in checkpoint.items():
+        if k.startswith('wav_kan.'):
+            new_key = k.replace('wav_kan.', 'bottleneck_kan.', 1)
+            new_state_dict[new_key] = v
+        else:
+            new_state_dict[k] = v
+    try:
+        model.load_state_dict(new_state_dict)
+    except Exception as e:
+        print(f"Strict load failed, trying strict=False: {e}")
+        model.load_state_dict(new_state_dict, strict=False)
     model.eval()
 
     # 1. Calculate Parameters
