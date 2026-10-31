@@ -16,6 +16,44 @@ try:
 except ImportError:
     get_model_complexity_info = None
 
+try:
+    from pypapi import events, papi_high
+    PAPI_AVAILABLE = True
+except Exception:
+    PAPI_AVAILABLE = False
+
+
+def measure_gflops_papi(model, input_shape=(1, 1, 257, 251), device='cuda'):
+    """
+    Đo GFLOPs sử dụng pypapi bằng cách chạy 1 forward pass với input giả.
+    """
+    if not PAPI_AVAILABLE:
+        raise RuntimeError("pypapi chưa được cài đặt. Vui lòng cài đặt bằng: pip install python-papi")
+
+    model.eval()
+    dummy_input = torch.randn(*input_shape).to(device)
+
+    try:
+        papi_high.start_counters([events.PAPI_FP_OPS])
+    except Exception as e:
+        raise RuntimeError(f"Không thể khởi động bộ đếm PAPI: {e}. "
+                           f"Hãy đảm bảo bạn có quyền truy cập PAPI và đang chạy trên môi trường hỗ trợ.")
+
+    with torch.no_grad():
+        _ = model(dummy_input)
+
+    try:
+        counters = papi_high.stop_counters()
+        flops = counters[0]
+    except Exception as e:
+        raise RuntimeError(f"Lỗi khi dừng bộ đếm PAPI: {e}")
+
+    if flops < 0:
+        raise RuntimeError("PAPI trả về giá trị âm. Thử chạy lại hoặc kiểm tra cấu hình PAPI.")
+
+    gflops = flops / 1e9
+    return gflops
+
 
 def evaluate_model():
     parser = argparse.ArgumentParser(description="Evaluate Wav-KAN-SEUNet")
@@ -28,6 +66,7 @@ def evaluate_model():
     parser.add_argument('--clean_dir', type=str, required=True, help='Path to clean test audio directory')
     parser.add_argument('--noisy_dir', type=str, required=True, help='Path to noisy test audio directory')
     parser.add_argument('--batch_size', type=int, default=8, help='Batch size for evaluation')
+    parser.add_argument('--use_papi', action='store_true', help='Use pypapi to measure GFLOPs for B-Spline KAN')
     args = parser.parse_args()
 
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -48,8 +87,7 @@ def evaluate_model():
     kan_type = args.kan_type
     if kan_type is None:
         keys = list(state_dict.keys())
-        # B-spline (pykan) thường có các key như base_fun.mask, spline_grid, ...
-        if any('spline_grid' in k or 'coef' in k and 'kan' in k.lower() for k in keys):
+        if any('spline_grid' in k or ('coef' in k and 'kan' in k.lower()) for k in keys):
             kan_type = 'bspline'
         elif any(k.startswith('bottleneck_kan.') or k.startswith('wav_kan.') for k in keys):
             kan_type = 'wavelet'
@@ -69,7 +107,7 @@ def evaluate_model():
         spline_order=args.bspline_order
     ).to(DEVICE)
 
-    # Tương thích ngược với checkpoint cũ
+    # Tương thích ngược với checkpoint cũ (wav_kan -> bottleneck_kan)
     new_state_dict = {}
     for k, v in state_dict.items():
         if k.startswith('wav_kan.'):
@@ -87,16 +125,33 @@ def evaluate_model():
 
     # Tính toán tham số
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    macs = "N/A"
+    macs_or_gflops = "N/A"
 
-    if get_model_complexity_info is not None and kan_type != 'bspline':
-        try:
-            macs, _ = get_model_complexity_info(model, (1, 257, 251), as_strings=True,
-                                                print_per_layer_stat=False, verbose=False)
-        except Exception as e:
-            print(f"Error computing GFLOPs with ptflops: {e}")
+    if kan_type == 'wavelet':
+        if get_model_complexity_info is not None:
+            try:
+                macs_or_gflops, _ = get_model_complexity_info(model, (1, 257, 251), as_strings=True,
+                                                              print_per_layer_stat=False, verbose=False)
+                print(f"GFLOPs/MACs (ptflops): {macs_or_gflops}")
+            except Exception as e:
+                print(f"Error computing GFLOPs with ptflops: {e}")
+        else:
+            print("ptflops not installed. Skipping GFLOPs calculation.")
     elif kan_type == 'bspline':
-        print("Skipping GFLOPs for bspline (pykan not supported by ptflops).")
+        if args.use_papi or PAPI_AVAILABLE:
+            if not PAPI_AVAILABLE:
+                print("pypapi không khả dụng. Cài đặt: pip install python-papi")
+            else:
+                try:
+                    print("Đo GFLOPs bằng pypapi...")
+                    gflops = measure_gflops_papi(model, input_shape=(1, 1, 257, 251), device=DEVICE.type)
+                    macs_or_gflops = f"{gflops:.3f} GFLOPs (PAPI FP_OPS)"
+                    print(f"GFLOPs (pypapi): {macs_or_gflops}")
+                except Exception as e:
+                    print(f"Lỗi khi đo GFLOPs bằng pypapi: {e}")
+                    print("Gợi ý: thử chạy với quyền root/sudo hoặc môi trường có hỗ trợ PAPI.")
+        else:
+            print("Bỏ qua GFLOPs cho B-Spline KAN. Thêm --use_papi để đo bằng pypapi.")
 
     all_pesq, all_stoi, all_csig, all_cbak, all_covl = [], [], [], [], []
 
@@ -139,8 +194,7 @@ def evaluate_model():
     else:
         print(f"B-spline         : grid={args.bspline_grid}, k={args.bspline_order}")
     print(f"Total Parameters : {total_params:,}")
-    if macs != "N/A":
-        print(f"GFLOPs (MACs)    : {macs}")
+    print(f"GFLOPs/MACs      : {macs_or_gflops}")
     print("-" * 40)
     print(f"PESQ  : {results['PESQ']:.4f}")
     print(f"STOI  : {results['STOI']:.4f}")
